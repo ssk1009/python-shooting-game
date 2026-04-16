@@ -19,15 +19,15 @@ RED = (255, 0, 0)
 GREEN = (0, 200, 0)
 ORANGE = (255, 165, 0)
 YELLOW = (255, 255, 0)
-CYAN = (0, 255, 255)      
-MAGENTA = (255, 0, 255)   
-BG_COLOR = (30, 30, 30)   
+CYAN = (0, 255, 255)
+MAGENTA = (255, 0, 255)
+BG_COLOR = (30, 30, 30)
 
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("My Awesome Action Game - Rendering Optimized")
+pygame.display.set_caption("My Awesome Action Game - Perfected")
 
-font = pygame.font.SysFont("malgungothic", 20)        
-large_font = pygame.font.SysFont("malgungothic", 60) 
+font = pygame.font.SysFont("malgungothic", 20)
+large_font = pygame.font.SysFont("malgungothic", 60)
 
 # [게임 밸런스 수치]
 SCORE_PER_LEVEL = 1000
@@ -101,7 +101,6 @@ SHAKE_LASER_FIRING = (50, 3)
 class Entity(pygame.sprite.Sprite):
     def __init__(self, x, y, width, height, color):
         super().__init__()
-        # 핵심 최적화 1: 매번 그리지 않고, 처음 태어날 때 도장(image)을 판다.
         self.image = pygame.Surface((width, height))
         self.image.fill(color)
         
@@ -122,8 +121,6 @@ class Entity(pygame.sprite.Sprite):
         self.true_x = float(self.rect.x)
         self.true_y = float(self.rect.y)
 
-    # 비효율적인 수동 draw() 메서드는 완전히 삭제되었습니다.
-
 
 # ==========================================
 # 3. 플레이어 및 투사체 클래스
@@ -141,6 +138,7 @@ class Player(Entity):
         self.has_double_shot = False
         self.item_timer = 0
         self.shield_timer = 0
+        self.is_dropping = False 
 
     def handle_input(self, keys, dt_sec):
         if keys[pygame.K_LEFT]:
@@ -149,6 +147,11 @@ class Player(Entity):
         if keys[pygame.K_RIGHT]:
             self.true_x += self.speed * dt_sec
             self.direction = 1
+
+        if keys[pygame.K_DOWN]:
+            self.is_dropping = True
+        else:
+            self.is_dropping = False
 
         self.update_rect()
 
@@ -181,13 +184,12 @@ class Player(Entity):
         self.true_y += self.y_vel * dt_sec
         self.update_rect()
         
-        # 무적 깜빡임 효과 (update에서 image 자체를 보였다 안보였다 처리)
         if self.invincible_timer > 0:
             self.invincible_timer -= dt
             if (int(self.invincible_timer) // 100) % 2 == 0:
                 self.image.set_alpha(255)
             else:
-                self.image.set_alpha(0) # 투명하게 만듦
+                self.image.set_alpha(0)
         else:
             self.image.set_alpha(255)
             
@@ -203,10 +205,14 @@ class Player(Entity):
         if self.y_vel >= 0:
             temp_rect = self.rect.copy()
             temp_rect.y += TOLERANCE_Y
+            
             for plat in platforms:
-                if temp_rect.colliderect(plat):
-                    if self.rect.bottom - (self.y_vel * dt_sec) <= plat.top + TOLERANCE_Y:
-                        self.rect.bottom = plat.top
+                if temp_rect.colliderect(plat.rect):
+                    if plat.is_passable and self.is_dropping:
+                        continue
+                        
+                    if self.rect.bottom - (self.y_vel * dt_sec) <= plat.rect.top + TOLERANCE_Y:
+                        self.rect.bottom = plat.rect.top
                         self.sync_from_rect()
                         self.y_vel = 0
                         on_ground = True
@@ -215,7 +221,6 @@ class Player(Entity):
         self.is_jumping = not on_ground
 
     def draw_effects(self, surface):
-        """본체와 별개로 그려져야 할 쉴드(VFX)만 담당"""
         if self.shield_timer > 0:
             pygame.draw.rect(surface, CYAN, self.rect.inflate(10, 10), 3)
 
@@ -281,8 +286,8 @@ class Enemy(Entity):
 
         on_ground = False
         for plat in platforms:
-            if self.rect.colliderect(plat) and self.y_vel > 0:
-                self.rect.bottom = plat.top
+            if self.rect.colliderect(plat.rect) and self.y_vel > 0:
+                self.rect.bottom = plat.rect.top
                 self.sync_from_rect()
                 self.y_vel = 0
                 on_ground = True
@@ -297,7 +302,6 @@ class Enemy(Entity):
                     self.jump_cooldown = ENEMY_JUMP_COOLDOWN
 
     def draw_health(self, surface):
-        """별도로 체력바만 렌더링"""
         hp_ratio = self.hp / self.max_hp
         pygame.draw.rect(surface, RED, (self.rect.x, self.rect.y - 10, self.rect.width, 5))
         pygame.draw.rect(surface, GREEN, (self.rect.x, self.rect.y - 10, self.rect.width * hp_ratio, 5))
@@ -306,7 +310,7 @@ class Enemy(Entity):
 class RangedEnemy(Enemy):
     def __init__(self, x, y, level=1):
         super().__init__(x, y, level)
-        self.image.fill(GREEN) # 색상 변경
+        self.image.fill(GREEN)
         self.shoot_delay = 0
 
     def update(self, player_rect, platforms, dt, enemy_bullets_group=None):
@@ -326,8 +330,8 @@ class RangedEnemy(Enemy):
             self.kill()
 
         for plat in platforms:
-            if self.rect.colliderect(plat) and self.y_vel > 0:
-                self.rect.bottom = plat.top
+            if self.rect.colliderect(plat.rect) and self.y_vel > 0:
+                self.rect.bottom = plat.rect.top
                 self.sync_from_rect()
                 self.y_vel = 0
 
@@ -417,8 +421,8 @@ class DashBoss(Enemy):
 
         self.on_ground = False
         for plat in platforms:
-            if self.rect.colliderect(plat) and self.y_vel > 0:
-                self.rect.bottom = plat.top
+            if self.rect.colliderect(plat.rect) and self.y_vel > 0:
+                self.rect.bottom = plat.rect.top
                 self.sync_from_rect()
                 self.y_vel = 0
                 self.on_ground = True
@@ -489,7 +493,6 @@ class Item(Entity):
         super().__init__(x, y, 25, 25, color)
 
     def update(self, dt):
-        """깜빡이는 로직을 draw 대신 update로 가져와 image(도장)를 바꿈"""
         if (pygame.time.get_ticks() // 200) % 2 == 0:
             self.image.fill(self.base_color)
         else:
@@ -526,16 +529,27 @@ class ShieldItem(Item):
 
 
 # ==========================================
+# 5.5. 발판 (Platform) 클래스
+# ==========================================
+class Platform(Entity):
+    def __init__(self, x, y, width, height, color, is_passable):
+        super().__init__(x, y, width, height, color)
+        self.is_passable = is_passable 
+
+class SolidGround(Platform):
+    def __init__(self, x, y, width, height):
+        super().__init__(x, y, width, height, GREEN, is_passable=False)
+
+class DropPlatform(Platform):
+    def __init__(self, x, y, width, height):
+        super().__init__(x, y, width, height, YELLOW, is_passable=True)
+
+
+# ==========================================
 # 6. 게임 매니저
 # ==========================================
 class Game:
     def __init__(self):
-        self.platforms = [
-            pygame.Rect(0, SCREEN_HEIGHT - 40, SCREEN_WIDTH, 40),
-            pygame.Rect(200, 450, 200, 20),
-            pygame.Rect(450, 300, 200, 20),
-            pygame.Rect(150, 180, 200, 20)
-        ]
         self.shake_timer = 0
         self.shake_intensity = 0
         self.reset()
@@ -553,6 +567,12 @@ class Game:
         self.missiles = pygame.sprite.Group()
         self.enemy_bullets = pygame.sprite.Group()
         self.items = pygame.sprite.Group()
+        self.platforms = pygame.sprite.Group()
+        
+        self.platforms.add(SolidGround(0, SCREEN_HEIGHT - 40, SCREEN_WIDTH, 40))
+        self.platforms.add(DropPlatform(200, 450, 200, 20))
+        self.platforms.add(DropPlatform(450, 300, 200, 20))
+        self.platforms.add(DropPlatform(150, 180, 200, 20))
         
         self.enemies.add(Enemy(random.randint(0, 700), 0, self.level))
         self.enemies.add(RangedEnemy(700, 0, self.level))
@@ -667,7 +687,7 @@ class Game:
                     spawn_y = random.randint(100, SCREEN_HEIGHT - 100)
                     temp_rect = pygame.Rect(spawn_x, spawn_y, 25, 25)
                     
-                    collision = any(temp_rect.colliderect(p) for p in self.platforms)
+                    collision = any(temp_rect.colliderect(p.rect) for p in self.platforms)
                     if not collision:
                         valid_position = True
                         
@@ -686,7 +706,6 @@ class Game:
                 new_enemy = Enemy(random.choice([0, 750]), 0, self.level)
             self.enemies.add(new_enemy)
 
-        # 아이템도 이제 도장을 바꾸기 위해 update를 호출합니다.
         for i in self.items:
             i.update(dt)
             
@@ -705,20 +724,17 @@ class Game:
         temp_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         temp_surface.fill(BG_COLOR)
         
-        for plat in self.platforms:
-            pygame.draw.rect(temp_surface, GREEN, plat)
+        # [핵심 교정 사항] Z-Index(레이어 순서) 정상화: 가장 먼저 지형을 깔아야 합니다.
+        self.platforms.draw(temp_surface)
         
-        # 핵심 최적화 2: 끔찍했던 for문 지옥이 C언어 엔진의 초고속 Blit으로 대체됨
+        # 그 다음으로 객체들을 올립니다. (아이템 중복 호출 삭제 완료)
         self.items.draw(temp_surface)
         self.missiles.draw(temp_surface)
         self.enemy_bullets.draw(temp_surface)
         self.enemies.draw(temp_surface)
         self.bosses.draw(temp_surface)
         
-        # 플레이어 렌더링 (단일 객체이므로 직접 blit)
         temp_surface.blit(self.player.image, self.player.rect)
-        
-        # 특수효과 및 UI 렌더링 (몸통 위에 덧그림)
         self.player.draw_effects(temp_surface)
         
         for e in self.enemies:
