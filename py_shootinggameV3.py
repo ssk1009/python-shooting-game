@@ -8,14 +8,12 @@ import math
 # ==========================================
 pygame.init()
 
-# [디스플레이 및 환경]
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 TARGET_FPS = 60
 GRAVITY = 2400.0
 TOLERANCE_Y = 2
 
-# [색상]
 WHITE = (255, 255, 255)
 RED = (255, 0, 0)
 GREEN = (0, 200, 0)
@@ -26,7 +24,7 @@ MAGENTA = (255, 0, 255)
 BG_COLOR = (30, 30, 30)   
 
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("My Awesome Action Game - Sprite Architecture")
+pygame.display.set_caption("My Awesome Action Game - Rendering Optimized")
 
 font = pygame.font.SysFont("malgungothic", 20)        
 large_font = pygame.font.SysFont("malgungothic", 60) 
@@ -98,15 +96,22 @@ SHAKE_LASER_FIRING = (50, 3)
 
 
 # ==========================================
-# 2. 베이스 클래스 (Sprite 상속 및 Float 좌표계)
+# 2. 베이스 클래스 (렌더링 뼈대 최적화)
 # ==========================================
 class Entity(pygame.sprite.Sprite):
     def __init__(self, x, y, width, height, color):
         super().__init__()
+        # 핵심 최적화 1: 매번 그리지 않고, 처음 태어날 때 도장(image)을 판다.
+        self.image = pygame.Surface((width, height))
+        self.image.fill(color)
+        
+        self.rect = self.image.get_rect()
+        self.rect.x = int(x)
+        self.rect.y = int(y)
+        
         self.true_x = float(x)
         self.true_y = float(y)
-        self.rect = pygame.Rect(int(x), int(y), width, height)
-        self.color = color
+        self.base_color = color
         self.y_vel = 0.0
 
     def update_rect(self):
@@ -117,8 +122,7 @@ class Entity(pygame.sprite.Sprite):
         self.true_x = float(self.rect.x)
         self.true_y = float(self.rect.y)
 
-    def draw(self, surface):
-        pygame.draw.rect(surface, self.color, self.rect)
+    # 비효율적인 수동 draw() 메서드는 완전히 삭제되었습니다.
 
 
 # ==========================================
@@ -177,8 +181,15 @@ class Player(Entity):
         self.true_y += self.y_vel * dt_sec
         self.update_rect()
         
+        # 무적 깜빡임 효과 (update에서 image 자체를 보였다 안보였다 처리)
         if self.invincible_timer > 0:
             self.invincible_timer -= dt
+            if (int(self.invincible_timer) // 100) % 2 == 0:
+                self.image.set_alpha(255)
+            else:
+                self.image.set_alpha(0) # 투명하게 만듦
+        else:
+            self.image.set_alpha(255)
             
         if self.has_double_shot:
             self.item_timer -= dt
@@ -194,7 +205,6 @@ class Player(Entity):
             temp_rect.y += TOLERANCE_Y
             for plat in platforms:
                 if temp_rect.colliderect(plat):
-                    # 이전 프레임 위치를 고려한 정확한 착지 검사
                     if self.rect.bottom - (self.y_vel * dt_sec) <= plat.top + TOLERANCE_Y:
                         self.rect.bottom = plat.top
                         self.sync_from_rect()
@@ -204,9 +214,8 @@ class Player(Entity):
                         
         self.is_jumping = not on_ground
 
-    def draw(self, surface):
-        if self.invincible_timer <= 0 or (self.invincible_timer // 100) % 2 == 0:
-            super().draw(surface)
+    def draw_effects(self, surface):
+        """본체와 별개로 그려져야 할 쉴드(VFX)만 담당"""
         if self.shield_timer > 0:
             pygame.draw.rect(surface, CYAN, self.rect.inflate(10, 10), 3)
 
@@ -222,7 +231,6 @@ class Missile(Entity):
         self.true_x += self.speed * self.direction * dt_sec
         self.update_rect()
         
-        # 화면 밖으로 나가면 즉시 메모리 해제 및 그룹에서 제거
         if not pygame.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT).colliderect(self.rect):
             self.kill()
 
@@ -288,8 +296,8 @@ class Enemy(Entity):
                     self.y_vel = ENEMY_JUMP_FORCE
                     self.jump_cooldown = ENEMY_JUMP_COOLDOWN
 
-    def draw(self, surface):
-        super().draw(surface)
+    def draw_health(self, surface):
+        """별도로 체력바만 렌더링"""
         hp_ratio = self.hp / self.max_hp
         pygame.draw.rect(surface, RED, (self.rect.x, self.rect.y - 10, self.rect.width, 5))
         pygame.draw.rect(surface, GREEN, (self.rect.x, self.rect.y - 10, self.rect.width * hp_ratio, 5))
@@ -298,7 +306,7 @@ class Enemy(Entity):
 class RangedEnemy(Enemy):
     def __init__(self, x, y, level=1):
         super().__init__(x, y, level)
-        self.color = GREEN
+        self.image.fill(GREEN) # 색상 변경
         self.shoot_delay = 0
 
     def update(self, player_rect, platforms, dt, enemy_bullets_group=None):
@@ -333,7 +341,10 @@ class RangedEnemy(Enemy):
 class DashBoss(Enemy):
     def __init__(self, x, y):
         super().__init__(x, y)
-        self.rect.size = (70, 70)
+        self.image = pygame.Surface((70, 70))
+        self.rect = self.image.get_rect()
+        self.rect.topleft = (x, y)
+        
         self.hp = DBOSS_MAX_HP
         self.max_hp = DBOSS_MAX_HP
         self.state = "IDLE"
@@ -346,20 +357,20 @@ class DashBoss(Enemy):
         self.timer += dt
         
         if self.state == "IDLE":
-            self.color = ORANGE
+            self.image.fill(ORANGE)
             if self.timer > DBOSS_IDLE_TIME:
                 self.timer = 0
                 self.state = "READY" if random.random() < 0.6 else "JUMP_READY"
                 
         elif self.state == "READY":
-            self.color = WHITE
+            self.image.fill(WHITE)
             if self.timer > DBOSS_READY_TIME:
                 self.state = "DASH"
                 self.dash_dir = 1 if player_rect.x > self.rect.x else -1
                 self.timer = 0
                 
         elif self.state == "DASH":
-            self.color = RED
+            self.image.fill(RED)
             self.true_x += self.dash_dir * DBOSS_DASH_SPEED * dt_sec
             self.update_rect()
             
@@ -371,7 +382,7 @@ class DashBoss(Enemy):
                 self.timer = 0
                 
         elif self.state == "JUMP_READY":
-            self.color = CYAN
+            self.image.fill(CYAN)
             if self.timer > DBOSS_READY_TIME:
                 self.state = "JUMP"
                 self.y_vel = DBOSS_JUMP_FORCE
@@ -379,7 +390,7 @@ class DashBoss(Enemy):
                 self.dash_dir = 1 if player_rect.x > self.rect.x else -1
                 
         elif self.state == "JUMP":
-            self.color = MAGENTA
+            self.image.fill(MAGENTA)
             self.true_x += self.dash_dir * DBOSS_JUMP_SPEED_X * dt_sec
             self.update_rect()
             
@@ -387,7 +398,6 @@ class DashBoss(Enemy):
                 self.state = "IDLE"
                 self.timer = 0
                 
-        # 벽 충돌 처리
         if self.state in ["DASH", "JUMP"]:
             if self.rect.left <= 0:
                 self.rect.left = 0
@@ -417,10 +427,12 @@ class DashBoss(Enemy):
 class LaserBoss(Enemy):
     def __init__(self, x, y):
         super().__init__(x, y)
-        self.rect.size = (80, 80)
+        self.image = pygame.Surface((80, 80))
+        self.rect = self.image.get_rect()
+        self.rect.topleft = (x, y)
+        
         self.hp = LBOSS_MAX_HP
         self.max_hp = LBOSS_MAX_HP
-        self.color = (100, 0, 100)
         self.state = "MOVE"
         self.timer = 0
         self.laser_rect = pygame.Rect(0, 0, 0, 0)
@@ -432,6 +444,7 @@ class LaserBoss(Enemy):
         self.timer += dt
         
         if self.state == "MOVE":
+            self.image.fill((100, 0, 100))
             move_speed = LBOSS_MOVE_SPEED * dt_sec
             self.true_x += move_speed if self.rect.x < player_rect.x else -move_speed
             self.true_y = float(self.base_y + math.sin(pygame.time.get_ticks() * LBOSS_SINE_FREQ) * LBOSS_SINE_AMP)
@@ -442,7 +455,7 @@ class LaserBoss(Enemy):
                 self.timer = 0
                 
         elif self.state == "CHARGE":
-            self.color = (200, 100, 255)
+            self.image.fill((200, 100, 255))
             if self.timer > LBOSS_CHARGE_TIME:
                 self.state = "FIRE"
                 self.timer = 0
@@ -450,7 +463,7 @@ class LaserBoss(Enemy):
                 self.laser_rect = pygame.Rect(self.rect.centerx - 40, self.rect.bottom, 80, SCREEN_HEIGHT)
                 
         elif self.state == "FIRE":
-            self.color = WHITE
+            self.image.fill(WHITE)
             self.laser_rect.top = self.rect.bottom
             if self.timer > LBOSS_FIRE_TIME:
                 self.state = "MOVE"
@@ -460,8 +473,7 @@ class LaserBoss(Enemy):
         if self.rect.top > SCREEN_HEIGHT:
             self.kill()
 
-    def draw(self, surface):
-        super().draw(surface)
+    def draw_effects(self, surface):
         if self.state == "CHARGE":
             pygame.draw.rect(surface, RED, (self.rect.centerx - 2, self.rect.bottom, 4, SCREEN_HEIGHT), 1)
         if self.is_firing:
@@ -470,21 +482,22 @@ class LaserBoss(Enemy):
 
 
 # ==========================================
-# 5. 아이템 클래스 (다형성 적용)
+# 5. 아이템 클래스
 # ==========================================
 class Item(Entity):
     def __init__(self, x, y, color):
         super().__init__(x, y, 25, 25, color)
 
-    def apply_effect(self, player):
-        """이 아이템이 플레이어에게 미치는 효과 (자식 클래스에서 덮어써야 함)"""
-        pass 
-
-    def draw(self, surface):
+    def update(self, dt):
+        """깜빡이는 로직을 draw 대신 update로 가져와 image(도장)를 바꿈"""
         if (pygame.time.get_ticks() // 200) % 2 == 0:
-            super().draw(surface)
+            self.image.fill(self.base_color)
         else:
-            pygame.draw.rect(surface, WHITE, self.rect, 2)
+            self.image.fill(BG_COLOR)
+            pygame.draw.rect(self.image, WHITE, self.image.get_rect(), 2)
+
+    def apply_effect(self, player):
+        pass 
 
 
 class HealItem(Item):
@@ -565,13 +578,11 @@ class Game:
             self.ui_message = "낭떠러지로 추락!"
             self.ui_message_timer = 3000
 
-        # 아이템 충돌 처리 (다형성)
         hit_items = pygame.sprite.spritecollide(self.player, self.items, True)
         for item in hit_items:
             item.apply_effect(self.player)
             self.player.score += SCORE_ITEM_PICKUP
 
-        # 미사일 vs 적
         enemy_hits = pygame.sprite.groupcollide(self.enemies, self.missiles, False, True)
         for enemy, hit_missiles in enemy_hits.items():
             enemy.hp -= MISSILE_DAMAGE * len(hit_missiles)
@@ -579,7 +590,6 @@ class Game:
                 enemy.kill() 
                 self.player.score += SCORE_ENEMY_KILL
 
-        # 미사일 vs 보스
         boss_hits = pygame.sprite.groupcollide(self.bosses, self.missiles, False, True)
         for boss, hit_missiles in boss_hits.items():
             boss.hp -= MISSILE_DAMAGE * len(hit_missiles)
@@ -588,13 +598,11 @@ class Game:
                 self.player.score += SCORE_BOSS_KILL
                 self.trigger_shake(*SHAKE_BOSS_KILL)
 
-        # 적 총알 vs 플레이어
         if pygame.sprite.spritecollide(self.player, self.enemy_bullets, True):
             if self.player.shield_timer <= 0: 
                 self.player.hp -= ENEMY_BULLET_DAMAGE
                 self.trigger_shake(*SHAKE_PLAYER_HIT_BULLET)
 
-        # 적/보스 몸통 박치기 vs 플레이어
         if self.player.invincible_timer <= 0:
             collide_enemy = pygame.sprite.spritecollideany(self.player, self.enemies)
             collide_boss = pygame.sprite.spritecollideany(self.player, self.bosses)
@@ -605,7 +613,6 @@ class Game:
                     self.trigger_shake(*SHAKE_PLAYER_HIT_MELEE)
                 self.player.invincible_timer = PLAYER_INVINCIBLE_DUR
 
-        # 레이저 보스 특수 공격 처리
         for b in self.bosses:
             if isinstance(b, LaserBoss) and b.is_firing:
                 if self.player.rect.colliderect(b.laser_rect):
@@ -679,6 +686,10 @@ class Game:
                 new_enemy = Enemy(random.choice([0, 750]), 0, self.level)
             self.enemies.add(new_enemy)
 
+        # 아이템도 이제 도장을 바꾸기 위해 update를 호출합니다.
+        for i in self.items:
+            i.update(dt)
+            
         for e in self.enemies:
             e.update(self.player.rect, self.platforms, dt, self.enemy_bullets)
             
@@ -697,18 +708,26 @@ class Game:
         for plat in self.platforms:
             pygame.draw.rect(temp_surface, GREEN, plat)
         
-        for i in self.items:
-            i.draw(temp_surface)
-        for m in self.missiles:
-            m.draw(temp_surface)
-        for eb in self.enemy_bullets:
-            eb.draw(temp_surface)
-        for e in self.enemies:
-            e.draw(temp_surface)
-        for b in self.bosses:
-            b.draw(temp_surface)
+        # 핵심 최적화 2: 끔찍했던 for문 지옥이 C언어 엔진의 초고속 Blit으로 대체됨
+        self.items.draw(temp_surface)
+        self.missiles.draw(temp_surface)
+        self.enemy_bullets.draw(temp_surface)
+        self.enemies.draw(temp_surface)
+        self.bosses.draw(temp_surface)
         
-        self.player.draw(temp_surface)
+        # 플레이어 렌더링 (단일 객체이므로 직접 blit)
+        temp_surface.blit(self.player.image, self.player.rect)
+        
+        # 특수효과 및 UI 렌더링 (몸통 위에 덧그림)
+        self.player.draw_effects(temp_surface)
+        
+        for e in self.enemies:
+            e.draw_health(temp_surface)
+        for b in self.bosses:
+            b.draw_health(temp_surface)
+            if isinstance(b, LaserBoss):
+                b.draw_effects(temp_surface)
+                
         self.draw_ui(temp_surface)
         
         if self.shake_timer > 0:
