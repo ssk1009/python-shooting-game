@@ -1,4 +1,3 @@
-
 import pygame
 import sys
 import random
@@ -10,7 +9,7 @@ import math
 pygame.init()
 
 SCREEN_WIDTH, SCREEN_HEIGHT = 800, 600
-GRAVITY = 0.8 
+GRAVITY = 2400.0  # 초당 가속도 (Pixels per second^2)
 
 WHITE = (255, 255, 255)
 RED = (255, 0, 0)
@@ -22,18 +21,30 @@ MAGENTA = (255, 0, 255)
 BG_COLOR = (30, 30, 30)   
 
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("My Awesome Action Game - Double Boss Mode")
+pygame.display.set_caption("My Awesome Action Game - Time Based")
 font = pygame.font.SysFont("malgungothic", 20)        
 large_font = pygame.font.SysFont("malgungothic", 60) 
 
 # ==========================================
-# 2. 베이스 클래스
+# 2. 베이스 클래스 (Float 좌표계 도입)
 # ==========================================
 class Entity:
     def __init__(self, x, y, width, height, color):
-        self.rect = pygame.Rect(x, y, width, height)
+        self.true_x = float(x) # 소수점 유지를 위한 실제 X 좌표
+        self.true_y = float(y) # 소수점 유지를 위한 실제 Y 좌표
+        self.rect = pygame.Rect(int(x), int(y), width, height)
         self.color = color
-        self.y_vel = 0 
+        self.y_vel = 0.0
+
+    def update_rect(self):
+        """실제 좌표를 Rect에 반영합니다."""
+        self.rect.x = int(self.true_x)
+        self.rect.y = int(self.true_y)
+
+    def sync_from_rect(self):
+        """충돌 보정 등으로 Rect가 변했을 때 실제 좌표를 동기화합니다."""
+        self.true_x = float(self.rect.x)
+        self.true_y = float(self.rect.y)
 
     def draw(self, surface):
         pygame.draw.rect(surface, self.color, self.rect)
@@ -50,25 +61,32 @@ class Player(Entity):
         self.direction = 1       
         self.is_jumping = False  
         self.invincible_timer = 0
+        self.speed = 300.0 # 초당 300픽셀 이동
         
         self.has_double_shot = False 
         self.item_timer = 0          
         self.shield_timer = 0        
 
-    def handle_input(self, keys):
+    def handle_input(self, keys, dt_sec):
         if keys[pygame.K_LEFT]:
-            self.rect.x -= 5
+            self.true_x -= self.speed * dt_sec
             self.direction = -1
         if keys[pygame.K_RIGHT]:
-            self.rect.x += 5
+            self.true_x += self.speed * dt_sec
             self.direction = 1
 
-        if self.rect.left < 0: self.rect.left = 0
-        if self.rect.right > SCREEN_WIDTH: self.rect.right = SCREEN_WIDTH
+        self.update_rect()
+
+        if self.rect.left < 0: 
+            self.rect.left = 0
+            self.sync_from_rect()
+        if self.rect.right > SCREEN_WIDTH: 
+            self.rect.right = SCREEN_WIDTH
+            self.sync_from_rect()
 
     def jump(self):
         if not self.is_jumping:
-            self.y_vel = -16      
+            self.y_vel = -900.0 # 초기 점프 속도
             self.is_jumping = True
 
     def shoot(self, missile_list):
@@ -77,8 +95,11 @@ class Player(Entity):
             missile_list.append(Missile(self.rect.centerx, self.rect.centery, self.direction, off))
 
     def update(self, platforms, dt):
-        self.y_vel += GRAVITY
-        self.rect.y += self.y_vel
+        dt_sec = dt / 1000.0
+        
+        self.y_vel += GRAVITY * dt_sec
+        self.true_y += self.y_vel * dt_sec
+        self.update_rect()
         
         if self.invincible_timer > 0: self.invincible_timer -= dt
         if self.has_double_shot:
@@ -88,12 +109,15 @@ class Player(Entity):
 
         on_ground = False
         if self.y_vel >= 0:
+            # 착지 판정 (아래로 2픽셀 여유)
             temp_rect = self.rect.copy()
             temp_rect.y += 2
             for plat in platforms:
                 if temp_rect.colliderect(plat):
-                    if self.rect.bottom <= plat.top + self.y_vel + 2:
+                    # 이전 프레임 위치를 고려한 정확한 착지
+                    if self.rect.bottom - (self.y_vel * dt_sec) <= plat.top + 2:
                         self.rect.bottom = plat.top
+                        self.sync_from_rect()
                         self.y_vel = 0
                         on_ground = True
                         break
@@ -109,21 +133,26 @@ class Missile(Entity):
     def __init__(self, x, y, direction, offset_y=0):
         super().__init__(x, y + offset_y, 15, 8, CYAN)
         self.direction = direction
-        self.speed = 12
+        self.speed = 800.0 # 초당 800픽셀 이동
 
-    def update(self):
-        self.rect.x += self.speed * self.direction 
+    def update(self, dt):
+        dt_sec = dt / 1000.0
+        self.true_x += self.speed * self.direction * dt_sec
+        self.update_rect()
 
 class EnemyBullet(Entity):
     def __init__(self, x, y, target_x, target_y):
         super().__init__(x, y, 10, 10, YELLOW)
         angle = math.atan2(target_y - y, target_x - x)
-        self.vx = math.cos(angle) * 5 
-        self.vy = math.sin(angle) * 5 
+        self.speed = 300.0
+        self.vx = math.cos(angle) * self.speed 
+        self.vy = math.sin(angle) * self.speed 
 
-    def update(self):
-        self.rect.x += self.vx
-        self.rect.y += self.vy
+    def update(self, dt):
+        dt_sec = dt / 1000.0
+        self.true_x += self.vx * dt_sec
+        self.true_y += self.vy * dt_sec
+        self.update_rect()
 
 # ==========================================
 # 4. 적 및 보스 클래스
@@ -133,34 +162,35 @@ class Enemy(Entity):
         super().__init__(x, y, 35, 35, ORANGE)
         self.max_hp = 100 + (level * 20) 
         self.hp = self.max_hp
-        self.speed = 2 + (level * 0.4)
+        self.speed = 120.0 + (level * 24.0) # 레벨당 속도 증가
         self.jump_cooldown = 0
 
-    def update(self, player_rect, platforms):
-        if self.rect.x < player_rect.x: self.rect.x += self.speed
-        else: self.rect.x -= self.speed
+    def update(self, player_rect, platforms, dt):
+        dt_sec = dt / 1000.0
         
-        self.y_vel += GRAVITY
-        self.rect.y += self.y_vel
+        if self.rect.x < player_rect.x: self.true_x += self.speed * dt_sec
+        else: self.true_x -= self.speed * dt_sec
+        
+        self.y_vel += GRAVITY * dt_sec
+        self.true_y += self.y_vel * dt_sec
+        self.update_rect()
 
         on_ground = False
         for plat in platforms:
             if self.rect.colliderect(plat) and self.y_vel > 0:
                 self.rect.bottom = plat.top
+                self.sync_from_rect()
                 self.y_vel = 0
                 on_ground = True
-        if self.jump_cooldown > 0:
-            self.jump_cooldown -= 1
-            
-        
-        if on_ground and self.jump_cooldown <= 0:
-            
-            if player_rect.bottom < self.rect.top - 20: 
                 
+        if self.jump_cooldown > 0:
+            self.jump_cooldown -= dt
+            
+        if on_ground and self.jump_cooldown <= 0:
+            if player_rect.bottom < self.rect.top - 20: 
                 if random.random() < 0.05: 
-                    self.y_vel = -15 
-                    self.jump_cooldown = 60
-        
+                    self.y_vel = -900.0 
+                    self.jump_cooldown = 1000 # 1초 쿨타임
 
     def draw(self, surface):
         super().draw(surface)
@@ -173,20 +203,25 @@ class RangedEnemy(Enemy):
         self.color = GREEN
         self.shoot_delay = 0
 
-    def update(self, player_rect, platforms, enemy_bullets):
+    def update(self, player_rect, platforms, enemy_bullets, dt):
+        dt_sec = dt / 1000.0
         dist = player_rect.x - self.rect.x
-        if abs(dist) > 300: self.rect.x += self.speed if dist > 0 else -self.speed
-        elif abs(dist) < 200: self.rect.x -= self.speed if dist > 0 else -self.speed
+        
+        if abs(dist) > 300: self.true_x += self.speed * dt_sec if dist > 0 else -self.speed * dt_sec
+        elif abs(dist) < 200: self.true_x -= self.speed * dt_sec if dist > 0 else -self.speed * dt_sec
 
-        self.y_vel += GRAVITY
-        self.rect.y += self.y_vel
+        self.y_vel += GRAVITY * dt_sec
+        self.true_y += self.y_vel * dt_sec
+        self.update_rect()
+        
         for plat in platforms:
             if self.rect.colliderect(plat) and self.y_vel > 0:
                 self.rect.bottom = plat.top
+                self.sync_from_rect()
                 self.y_vel = 0
 
-        self.shoot_delay += 1
-        if self.shoot_delay > 90:
+        self.shoot_delay += dt
+        if self.shoot_delay > 1500: # 1.5초마다 사격
             enemy_bullets.append(EnemyBullet(self.rect.centerx, self.rect.centery, player_rect.centerx, player_rect.centery))
             self.shoot_delay = 0
 
@@ -201,48 +236,71 @@ class DashBoss(Enemy):
         self.dash_dir = 1
         self.on_ground = False 
 
-    def update(self, player_rect, platforms):
-        self.timer += 1
+    def update(self, player_rect, platforms, dt):
+        dt_sec = dt / 1000.0
+        self.timer += dt
+        
         if self.state == "IDLE":
             self.color = ORANGE
-            if self.timer > 90: 
+            if self.timer > 1500: # 1.5초 대기
                 self.timer = 0
                 self.state = "READY" if random.random() < 0.6 else "JUMP_READY"
+                
         elif self.state == "READY":
             self.color = WHITE
-            if self.timer > 30:
+            if self.timer > 500: # 0.5초 준비
                 self.state = "DASH"
                 self.dash_dir = 1 if player_rect.x > self.rect.x else -1 
                 self.timer = 0
+                
         elif self.state == "DASH":
             self.color = RED
-            self.rect.x += self.dash_dir * 12
+            self.true_x += self.dash_dir * 800.0 * dt_sec # 초당 800 대쉬
+            self.update_rect()
+            
             if self.rect.left <= 0 or self.rect.right >= SCREEN_WIDTH:
                 self.dash_dir *= -1
-            if self.timer > 50: self.state = "IDLE"; self.timer = 0
+            if self.timer > 800: # 0.8초간 대쉬
+                self.state = "IDLE"
+                self.timer = 0
+                
         elif self.state == "JUMP_READY":
             self.color = CYAN
-            if self.timer > 30:
-                self.state = "JUMP"; self.y_vel = -22; self.timer = 0
+            if self.timer > 500: # 0.5초 준비
+                self.state = "JUMP"
+                self.y_vel = -1200.0 
+                self.timer = 0
                 self.dash_dir = 1 if player_rect.x > self.rect.x else -1
+                
         elif self.state == "JUMP":
             self.color = MAGENTA
-            self.rect.x += self.dash_dir * 7 
-            if self.timer > 10 and self.on_ground: self.state = "IDLE"; self.timer = 0
+            self.true_x += self.dash_dir * 450.0 * dt_sec 
+            self.update_rect()
+            if self.timer > 160 and self.on_ground: 
+                self.state = "IDLE"
+                self.timer = 0
+                
         if self.state in ["DASH", "JUMP"]:
             if self.rect.left <= 0:
-                self.rect.left = 0         
+                self.rect.left = 0
+                self.sync_from_rect()
                 self.dash_dir = 1         
             elif self.rect.right >= SCREEN_WIDTH:
                 self.rect.right = SCREEN_WIDTH 
+                self.sync_from_rect()
                 self.dash_dir = -1        
 
-        self.y_vel += GRAVITY
-        self.rect.y += self.y_vel
+        self.y_vel += GRAVITY * dt_sec
+        self.true_y += self.y_vel * dt_sec
+        self.update_rect()
         self.on_ground = False 
+        
         for plat in platforms:
             if self.rect.colliderect(plat) and self.y_vel > 0:
-                self.rect.bottom = plat.top; self.y_vel = 0; self.on_ground = True 
+                self.rect.bottom = plat.top
+                self.sync_from_rect()
+                self.y_vel = 0
+                self.on_ground = True 
 
 class LaserBoss(Enemy):
     def __init__(self, x, y):
@@ -255,10 +313,15 @@ class LaserBoss(Enemy):
         self.base_y = 150
 
     def update(self, player_rect, platforms, dt):
+        dt_sec = dt / 1000.0
         self.timer += dt
+        
         if self.state == "MOVE":
-            self.rect.x += 2 if self.rect.x < player_rect.x else -2
-            self.rect.y = self.base_y + math.sin(pygame.time.get_ticks() * 0.006) * 60
+            move_speed = 120.0 * dt_sec
+            self.true_x += move_speed if self.rect.x < player_rect.x else -move_speed
+            self.true_y = float(self.base_y + math.sin(pygame.time.get_ticks() * 0.006) * 60)
+            self.update_rect()
+            
             if self.timer > 3000: self.state = "CHARGE"; self.timer = 0
         elif self.state == "CHARGE":
             self.color = (200, 100, 255)
@@ -309,10 +372,7 @@ class Game:
         self.player = Player()
         self.level = 1; self.enemy_spawn_timer = 0 
         self.enemies = [Enemy(random.randint(0, 700), 0, self.level), RangedEnemy(700, 0, self.level)]
-        
-        
         self.bosses = [DashBoss(600, 400) if random.random() > 0.5 else LaserBoss(400, 150)]
-        
         self.items = [Item(400, 300)]; self.missiles = []; self.enemy_bullets = []
         self.game_over = False; self.item_spawn_timer = 0; self.boss_respawn_timer = 0
         self.ui_message = ""; self.ui_message_timer = 0; self.shake_timer = 0
@@ -328,7 +388,6 @@ class Game:
                 elif item.type == "shield": self.player.shield_timer = 5000
                 self.player.score += 500; self.items.remove(item)
 
-        
         for m in self.missiles[:]:
             for e in self.enemies[:]:
                 if m.rect.colliderect(e.rect):
@@ -347,7 +406,6 @@ class Game:
                 if self.player.shield_timer <= 0: self.player.hp -= 10; self.trigger_shake(100, 3)
                 self.enemy_bullets.remove(eb) 
 
-        
         check_list = self.enemies + self.bosses
         for e in check_list:
             if self.player.rect.colliderect(e.rect) and self.player.invincible_timer <= 0:
@@ -355,7 +413,6 @@ class Game:
                     self.player.hp -= 20; self.trigger_shake(200, 8)
                 self.player.invincible_timer = 1000 
 
-        
         for b in self.bosses:
             if isinstance(b, LaserBoss) and b.is_firing:
                 if self.player.rect.colliderect(b.laser_rect):
@@ -366,33 +423,29 @@ class Game:
 
     def update(self, dt):
         if self.game_over: return 
+        dt_sec = dt / 1000.0
+        
         self.player.update(self.platforms, dt)
         self.level = 1 + (self.player.score // 1000)
         
         if self.shake_timer > 0: self.shake_timer -= dt
         if self.ui_message_timer > 0: self.ui_message_timer -= dt
             
-        
         for b in self.bosses:
-            if isinstance(b, LaserBoss):
-                b.update(self.player.rect, self.platforms, dt)
-                if b.is_firing: self.trigger_shake(50, 3) 
-            else:
-                b.update(self.player.rect, self.platforms)
-            if b.rect.top > SCREEN_HEIGHT: b.hp = 0 # 낙사 처리
+            b.update(self.player.rect, self.platforms, dt)
+            if isinstance(b, LaserBoss) and b.is_firing: self.trigger_shake(50, 3) 
+            if b.rect.top > SCREEN_HEIGHT: b.hp = 0
 
-        
         target_boss_count = 2 if self.player.score >= 10000 else 1
         if len(self.bosses) < target_boss_count:
             self.boss_respawn_timer += dt
-            if self.boss_respawn_timer >= 10000: # 보스가 비어있으면 10초마다 하나씩 충전
+            if self.boss_respawn_timer >= 10000: 
                 new_boss = DashBoss(random.randint(100, 700), 100) if random.random() > 0.5 else LaserBoss(random.randint(100, 700), 150)
                 self.bosses.append(new_boss)
                 self.boss_respawn_timer = 0
                 self.ui_message = "보스가 등장했습니다!"
                 self.ui_message_timer = 2000
 
-        
         self.item_spawn_timer += dt
         if self.item_spawn_timer >= 5000:
             self.item_spawn_timer = 0
@@ -404,7 +457,6 @@ class Game:
                     if not collision: valid_position = True
                 self.items.append(Item(spawn_x, spawn_y, random.choice(["double_shot", "heal", "shield"])))
 
-        
         self.enemy_spawn_timer += dt
         spawn_delay = max(800, 4000 - (self.level * 400)) 
         if self.enemy_spawn_timer >= spawn_delay:
@@ -413,14 +465,14 @@ class Game:
             self.enemies.append(new_enemy)
 
         for e in self.enemies[:]:
-            e.update(self.player.rect, self.platforms, self.enemy_bullets) if isinstance(e, RangedEnemy) else e.update(self.player.rect, self.platforms)
+            e.update(self.player.rect, self.platforms, self.enemy_bullets, dt) if isinstance(e, RangedEnemy) else e.update(self.player.rect, self.platforms, dt)
             if e.rect.top > SCREEN_HEIGHT: self.enemies.remove(e)
 
         for m in self.missiles[:]:
-            m.update()
+            m.update(dt)
             if not screen.get_rect().colliderect(m.rect): self.missiles.remove(m)
         for eb in self.enemy_bullets[:]:
-            eb.update()
+            eb.update(dt)
             if not screen.get_rect().colliderect(eb.rect): self.enemy_bullets.remove(eb)
 
         self.process_collisions() 
@@ -443,7 +495,6 @@ class Game:
         pygame.draw.rect(surface, (50, 50, 50), (20, 20, 200, 20)) 
         pygame.draw.rect(surface, RED, (20, 20, max(0, self.player.hp * 2), 20)) 
         
-        
         boss_count = len(self.bosses)
         score_txt = font.render(f"LV: {self.level} | SCORE: {self.player.score} | BOSSES: {boss_count}", True, YELLOW)
         surface.blit(score_txt, (SCREEN_WIDTH - 380, 20))
@@ -460,6 +511,7 @@ class Game:
 game = Game(); clock = pygame.time.Clock() 
 while True:
     dt = clock.tick(60) 
+    
     for event in pygame.event.get():
         if event.type == pygame.QUIT: pygame.quit(); sys.exit()
         if event.type == pygame.KEYDOWN:
@@ -467,5 +519,11 @@ while True:
                 if event.key == pygame.K_SPACE: game.player.jump()
                 if event.key == pygame.K_s: game.player.shoot(game.missiles)
             elif event.key == pygame.K_r: game.reset()
-    if not game.game_over: game.player.handle_input(pygame.key.get_pressed())
-    game.update(dt); game.draw(screen); pygame.display.flip()
+            
+    if not game.game_over: 
+        dt_sec = dt / 1000.0
+        game.player.handle_input(pygame.key.get_pressed(), dt_sec)
+        
+    game.update(dt)
+    game.draw(screen)
+    pygame.display.flip()
